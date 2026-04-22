@@ -20,6 +20,10 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 &
 echo "Backend starting on http://localhost:8000"
 
 cd "$FRONTEND_DIR"
+if [ ! -d "node_modules" ]; then
+    echo "Installing frontend dependencies..."
+    npm install
+fi
 npm run dev &
 echo "Frontend starting on http://localhost:5173"
 
