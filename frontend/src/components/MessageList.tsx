@@ -14,11 +14,12 @@ export default function MessageList({ messages, isTyping }: Props) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
-
+  console.log('message',messages);
+  
   return (
     <div className="message-list">
       {messages.map((msg, i) => (
-        <MessageBubble key={i} role={msg.role} content={msg.content} />
+        <MessageBubble key={i} role={msg.role} content={msg.content} toolName={msg?.toolName}/>
       ))}
       {isTyping && (
         <div className="msg-row msg-row-left">

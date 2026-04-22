@@ -1,4 +1,18 @@
+import datetime
+
+
 TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "获取当前服务器的日期和时间。当用户提到相对日期（如昨天、上周）时，先调用此工具确认具体日期，再查询数据。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -15,8 +29,17 @@ TOOLS = [
                 "required": ["date"],
             },
         },
-    }
+    },
 ]
+
+
+def get_current_time() -> dict:
+    now = datetime.datetime.now()
+    return {
+        "current_datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "date": now.strftime("%Y-%m-%d"),
+        "weekday": now.strftime("%A"),
+    }
 
 
 def get_user_sleep_data(date: str) -> dict:

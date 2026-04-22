@@ -57,7 +57,6 @@ function App() {
 
               if (currentEvent === 'token') {
                 fullText += data.content
-                console.log("data.content---",data.content)
                 if (!aiMsgCreated) {
                   setIsTyping(false)
                   aiMsgCreated = true
@@ -65,29 +64,42 @@ function App() {
                 } else {
                   setMessages(prev => {
                     const updated = [...prev]
-                    const last = updated[updated.length - 1]
-                    if (last && last.role === 'assistant') {
-                      updated[updated.length - 1] = { ...last, content: fullText }
+                    for (let i = updated.length - 1; i >= 0; i--) {
+                      if (updated[i].role === 'assistant') {
+                        updated[i] = { ...updated[i], content: fullText }
+                        break
+                      }
                     }
                     return updated
                   })
                 }
               } else if (currentEvent === 'tool_use') {
                 setIsTyping(false)
-                setMessages(prev => [...prev, { role: 'system', content: '正在查询你的健康数据...' }])
+                fullText = ''
+                aiMsgCreated = false
+                setMessages(prev => [...prev, {
+                  role: 'tool',
+                  content: '',
+                  toolName: data.tool,
+                  toolStatus: 'calling',
+                }])
+                console.log('data.tool',data);
+                
               } else if (currentEvent === 'tool_result') {
-                // handled silently; token events will show final reply
+                setMessages(prev => {
+                  const updated = [...prev]
+                  for (let i = updated.length - 1; i >= 0; i--) {
+                    if (updated[i].role === 'tool' && updated[i].toolStatus === 'calling') {
+                      updated[i] = { ...updated[i], toolStatus: 'done' }
+                      break
+                    }
+                  }
+                  return updated
+                })
               } else if (currentEvent === 'done') {
                 setIsTyping(false)
-                if (aiMsgCreated) {
-                  setMessages(prev => {
-                    const updated = [...prev]
-                    const last = updated[updated.length - 1]
-                    if (last && last.role === 'assistant') {
-                      updated[updated.length - 1] = { ...last, content: data.content }
-                    }
-                    return updated
-                  })
+                if (!aiMsgCreated && data.content) {
+                  setMessages(prev => [...prev, { role: 'assistant', content: data.content }])
                 }
               } else if (currentEvent === 'error') {
                 setIsTyping(false)

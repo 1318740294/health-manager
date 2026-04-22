@@ -1,14 +1,17 @@
 import json
+import logging
 import os
 from collections.abc import AsyncGenerator
 
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from .session import session_manager
-from .tools import TOOLS, get_user_sleep_data
+from .tools import TOOLS, get_current_time, get_user_sleep_data
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
@@ -17,79 +20,38 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 
 class Agent:
     def __init__(self):
-        self.client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+        self.client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
-    def chat(self, session_id: str, message: str) -> AsyncGenerator[str, None]:
+    async def chat(self, session_id: str, message: str) -> AsyncGenerator[str, None]:
         session = session_manager.get_or_create(session_id)
         session.add_message("user", message)
+        logger.info("[%s] 收到消息: %s", session_id, message)
 
-        # 第一轮：非流式，判断是否触发 tool_call
-        response = self.client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=session.messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            stream=False,
-        )
-
-        choice = response.choices[0]
-        assistant_msg = choice.message
-
-        if assistant_msg.tool_calls:
-            # 模型请求调用工具
-            tool_call = assistant_msg.tool_calls[0]
-            func_name = tool_call.function.name
-            func_args = json.loads(tool_call.function.arguments)
-
-            # 将 assistant 的 tool_calls 消息加入历史
-            session.messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {
-                            "name": func_name,
-                            "arguments": tool_call.function.arguments,
-                        },
-                    }
-                ],
-            })
-
-            yield json.dumps(
-                {"event": "tool_use", "data": {"tool": func_name, "status": "calling"}},
-                ensure_ascii=False,
-            )
-
-            # 执行工具
-            if func_name == "get_user_sleep_data":
-                result = get_user_sleep_data(**func_args)
-            else:
-                result = {"error": f"Unknown tool: {func_name}"}
-
-            yield json.dumps(
-                {"event": "tool_result", "data": {"tool": func_name, "result": result}},
-                ensure_ascii=False,
-            )
-
-            # 将工具结果作为 tool message 加入历史
-            session.messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": json.dumps(result, ensure_ascii=False),
-            })
-
-            # 第二轮：流式生成最终回复
-            stream = self.client.chat.completions.create(
+        loop_count = 0
+        while True:
+            loop_count += 1
+            logger.info("[%s] 第 %d 轮 LLM 调用, 历史消息数: %d", session_id, loop_count, len(session.messages))
+            stream = await self.client.chat.completions.create(
                 model=LLM_MODEL,
                 messages=session.messages,
+                tools=TOOLS,
+                tool_choice="auto",
                 stream=True,
             )
 
+            tool_calls_accum: dict[int, dict] = {}
+            finish_reason = None
             full_content = ""
-            for chunk in stream:
-                delta = chunk.choices[0].delta if chunk.choices else None
+
+            async for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+
+                finish_reason = choice.finish_reason or finish_reason
+                delta = choice.delta
+
+                # 流式输出普通文本
                 if delta and delta.content:
                     full_content += delta.content
                     yield json.dumps(
@@ -97,25 +59,82 @@ class Agent:
                         ensure_ascii=False,
                     )
 
-            session.add_message("assistant", full_content)
-            yield json.dumps(
-                {"event": "done", "data": {"content": full_content}},
-                ensure_ascii=False,
-            )
+                # 累积 tool_call 的 delta
+                if delta and delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_accum:
+                            tool_calls_accum[idx] = {
+                                "id": tc_delta.id or "",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_accum[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_accum[idx]["arguments"] += tc_delta.function.arguments
+                        if tc_delta.id:
+                            tool_calls_accum[idx]["id"] = tc_delta.id
 
-        else:
-            # 未触发工具调用，直接流式生成回复
-            # 先回退 user message（因为第一轮已经加了），重新发起流式请求
-            # 实际上 messages 里已经有 user message，直接流式即可
-            # 但第一轮是非流式的，需要重新流式生成
-            # 简化处理：直接用第一轮的非流式结果作为回复
-            content = assistant_msg.content or ""
-            session.add_message("assistant", content)
-            yield json.dumps(
-                {"event": "token", "data": {"content": content}},
-                ensure_ascii=False,
-            )
-            yield json.dumps(
-                {"event": "done", "data": {"content": content}},
-                ensure_ascii=False,
-            )
+            if finish_reason != "tool_calls" or not tool_calls_accum:
+                logger.info("[%s] LLM 不再请求工具调用, 流式输出完成, 回复长度: %d", session_id, len(full_content))
+                break
+
+            logger.info("[%s] LLM 请求 %d 个工具调用: %s", session_id, len(tool_calls_accum), [tc["name"] for tc in tool_calls_accum.values()])
+
+            # 构造 assistant tool_calls 消息并加入历史
+            tool_calls_msg = []
+            for tc in tool_calls_accum.values():
+                tool_calls_msg.append({
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                    },
+                })
+
+            session.messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls_msg,
+            })
+
+            # 逐个执行工具调用
+            for tc in tool_calls_accum.values():
+                func_name = tc["name"]
+                func_args = json.loads(tc["arguments"] or "{}")
+
+                yield json.dumps(
+                    {"event": "tool_use", "data": {"tool": func_name, "status": "calling"}},
+                    ensure_ascii=False,
+                )
+
+                if func_name == "get_current_time":
+                    result = get_current_time()
+                elif func_name == "get_user_sleep_data":
+                    result = get_user_sleep_data(**func_args)
+                else:
+                    result = {"error": f"Unknown tool: {func_name}"}
+
+                logger.info("[%s] 工具 %s 执行完成, 参数: %s, 结果: %s", session_id, func_name, func_args, result)
+
+                yield json.dumps(
+                    {"event": "tool_result", "data": {"tool": func_name, "result": result}},
+                    ensure_ascii=False,
+                )
+
+                session.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+
+            # 循环继续，带着工具结果再次调用 LLM
+
+        session.add_message("assistant", full_content)
+        yield json.dumps(
+            {"event": "done", "data": {"content": full_content}},
+            ensure_ascii=False,
+        )

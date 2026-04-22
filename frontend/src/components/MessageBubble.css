@@ -60,3 +60,35 @@
   border-radius: 8px;
   align-self: center;
 }
+
+.msg-tool {
+  margin: 8px 52px;
+  font-size: 13px;
+  color: #888;
+  display: flex;
+  align-items: center;
+}
+
+.msg-tool-calling {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.msg-tool-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ccc;
+  border-top-color: #1677ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.msg-tool-done {
+  color: #52c41a;
+}

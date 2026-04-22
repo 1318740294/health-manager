@@ -6,7 +6,7 @@ def format_sse(event: str, data: str) -> str:
 
 
 async def sse_generator(generator: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
-     for raw in generator:
+     async for raw in generator:
         import json
 
         obj = json.loads(raw)
