@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { Input, Button } from 'antd-mobile'
+import React, { useState, useRef } from 'react'
+import { Input, Button, type InputRef } from 'antd-mobile'
 import './InputBar.css'
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
 
 export default function InputBar({ onSend, disabled }: Props) {
   const [text, setText] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<InputRef>(null)
 
   function handleSend() {
     const trimmed = text.trim()
